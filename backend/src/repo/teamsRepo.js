@@ -1,0 +1,9 @@
+import { pool } from "./connection.js";
+import { listUserCharacters } from "./storageRepo.js";
+export async function getTeam(userId) { const [teams] = await pool.query("SELECT id_team AS id, name FROM tb_teams WHERE id_user = ? LIMIT 1", [userId]); if (!teams[0]) return null; const [players] = await pool.query("SELECT slot_id AS slot, id_caracters AS characterId FROM tb_team_players WHERE id_team = ?", [teams[0].id]); return { ...teams[0], lineup: players.map((p) => ({ slot: p.slot, characterId: Number(p.characterId) })) }; }
+export async function saveTeam(userId, { name, lineup }) {
+  const ids = [...new Set(lineup.map((item) => Number(item.characterId)))]; const owned = new Set((await listUserCharacters(userId)).map((character) => character.id));
+  if (ids.some((id) => !owned.has(id))) throw Object.assign(new Error("Team has a character outside your collection."), { status: 400 });
+  const connection = await pool.getConnection();
+  try { await connection.beginTransaction(); const [teams] = await connection.query("SELECT id_team AS id FROM tb_teams WHERE id_user = ? LIMIT 1 FOR UPDATE", [userId]); let teamId = teams[0]?.id; if (!teamId) { const [result] = await connection.query("INSERT INTO tb_teams (id_user, name) VALUES (?, ?)", [userId, name]); teamId = result.insertId; } await connection.query("UPDATE tb_teams SET name = ? WHERE id_team = ?", [name, teamId]); await connection.query("DELETE FROM tb_team_players WHERE id_team = ?", [teamId]); for (const item of lineup) await connection.query("INSERT INTO tb_team_players (id_team, slot_id, id_caracters) VALUES (?, ?, ?)", [teamId, item.slot, item.characterId]); await connection.commit(); return getTeam(userId); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+}
